@@ -737,6 +737,18 @@ pgtype_attr_to_concise_type(const ConnectionClass *conn, OID type, int atttypmod
 				bLongVarchar = FALSE;
 			return ansi_to_wtype(conn, bLongVarchar ? SQL_LONGVARCHAR : (bFixed ? SQL_CHAR : SQL_VARCHAR));
 		case PG_TYPE_TEXT:
+			/*
+			 * SQL Server/MSDASQL LOB experiment, revision 3:
+			 * Compilation can observe an unknown length, while execution
+			 * observes a small positive longest value. Do not switch the
+			 * reported SQL type from SQL_WLONGVARCHAR to SQL_WVARCHAR
+			 * when MaxLongVarcharSize=SQL_NO_TOTAL opted into the test.
+			 * SQL Server rejects such a change as error 7356 (ISLONG).
+			 */
+			if (CC_is_in_unicode_driver(conn) &&
+			    ci->drivers.max_longvarchar_size == SQL_NO_TOTAL &&
+			    ci->drivers.text_as_longvarchar)
+				return ansi_to_wtype(conn, SQL_LONGVARCHAR);
 			bLongVarchar = ci->drivers.text_as_longvarchar;
 			if (bLongVarchar)
 			{
@@ -831,6 +843,15 @@ pgtype_attr_to_concise_type(const ConnectionClass *conn, OID type, int atttypmod
 			if (type == conn->lobj_type)
 				return SQL_LONGVARBINARY;
 
+			/*
+			 * Keep the long type stable for unknown PostgreSQL types
+			 * (notably json/jsonb), for the same MSDASQL prepare/execute
+			 * metadata consistency reason as PG_TYPE_TEXT above.
+			 */
+			if (CC_is_in_unicode_driver(conn) &&
+			    ci->drivers.max_longvarchar_size == SQL_NO_TOTAL &&
+			    ci->drivers.unknowns_as_longvarchar)
+				return SQL_LONGVARCHAR;
 			bLongVarchar = ci->drivers.unknowns_as_longvarchar;
 			if (bLongVarchar)
 			{
