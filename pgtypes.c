@@ -379,6 +379,25 @@ MYLOG(DETAIL_LOG_LEVEL, "!!! atttypmod  < 0 ?\n");
 
 MYLOG(DETAIL_LOG_LEVEL, "!!! adtsize_or_logngest=%d\n", adtsize_or_longestlen);
 	p = adtsize_or_longestlen; /* longest */
+#ifdef UNICODE_SUPPORT
+	/*
+	 * Experimental SQL Server/MSDASQL compatibility:
+	 * A ColumnSize of SQL_NO_TOTAL is surfaced as zero by SQLDescribeCol.
+	 * With a known longest result value, this can cause the OLE DB bridge
+	 * to bind SQL_C_WCHAR with BufferLength=0 and abort on SQLFetch.
+	 *
+	 * Report the observed value length only for the SQL Server Unicode
+	 * path, preserving SQL_WLONGVARCHAR as the SQL type. This does not
+	 * change how field data is copied or suppress truncation warnings.
+	 *
+	 * IMPORTANT: validate on SQL Server Linked Server against results
+	 * with known lengths, long UTF-8 text, and multiple rows. Do not use
+	 * the experimental build in production without verification.
+	 */
+	if (CC_is_in_unicode_driver(conn) && isSqlServr() &&
+	    maxsize == SQL_NO_TOTAL && p > 0)
+		return p;
+#endif /* UNICODE_SUPPORT */
 	/*
 	 * Catalog Result Sets -- use assigned column width (i.e., from
 	 * set_tuplefield_string)
