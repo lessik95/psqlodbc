@@ -45,3 +45,36 @@ Also compare UTF-8 bytes/hashes with PostgreSQL for representative rows includin
 ## Expected investigative follow-up
 
 If `SQLBindCol(BufferLength=0)` remains in the trace after this change, collect an ODBC manager trace / instrument `SQLDescribeCol`, `SQLColAttribute`, `SQLFetch`, and `SQLGetData`, then revisit the driver/bridge boundary before making more changes.
+
+
+## Revision 2 (diagnostic)
+
+The first build compiled successfully but a Linked Server test still produced error 7341.
+A later psqlODBC trace for `repeat('X',100000)::text` had `adtsize_or=100000`,
+`column_size=-4`, `SQLBindCol BufferLength=0`, and `SQLFetch` truncation.
+The trace PID differed from the SQL Server process PID. This suggests (but does
+not prove) that the driver is hosted out-of-process, where `isSqlServr()` would
+be false.
+
+Revision 2 **removes the `isSqlServr()` guard**. It activates only for Unicode
+drivers explicitly configured with `MaxLongVarcharSize=-4`, and only when
+a positive longest-result value is known. Look for this diagnostic marker
+with `MyLog=2`:
+
+```
+SQLSERVER_LOB_EXPERIMENT_V2: type=25 longest=100000
+```
+
+Interpret results in this order:
+
+1. **Marker present**, SQLDescribeCol size=100000, `OPENQUERY` works:
+   supports the metadata hypothesis for this query; test more cases.
+2. **Marker present**, SQLDescribeCol size=100000, still error 7341:
+   metadata alone was insufficient; inspect SQLBindCol and stream behavior.
+3. **Marker absent**, still size=-4: either the patched DLL was not loaded,
+   the size was not known at the time, or another condition excluded the
+   code path. Compare installed DLL with the CI artifact and inspect the log.
+
+This build is *not* side-by-side installable under a different ODBC driver
+name: the normal installer registers `PostgreSQL Unicode(x64)`. Back up DSN
+configuration and uninstall the previous experiment before installing v2.
