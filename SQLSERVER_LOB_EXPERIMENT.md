@@ -78,3 +78,37 @@ Interpret results in this order:
 This build is *not* side-by-side installable under a different ODBC driver
 name: the normal installer registers `PostgreSQL Unicode(x64)`. Back up DSN
 configuration and uninstall the previous experiment before installing v2.
+
+
+## Revision 3 (SQL Server error 7356)
+
+The V2 build passed single-row 100,000-character text, 1,589,499-character XML,
+Unicode, JSONB and a mixed-length TEXT result. However, this real query:
+
+```sql
+SELECT * FROM OPENQUERY([BOX-DWH],
+  'SELECT * FROM "CFG".t_service_config_var ORDER BY fk_id;');
+```
+
+failed with SQL Server error 7356, `DBCOLUMNFLAGS_ISLONG` changing from
+128 (prepare) to 0 (execution) for PostgreSQL TEXT `fc_description`.
+
+The psqlODBC MyLog confirmed that in the prepare path no rows had been fetched,
+`adtsize_or_longestlen=-3`, `ColumnSize=-4`, and `SQL_WLONGVARCHAR=-10`.
+During execution `longest=31`, and the original
+`pgtype_attr_to_concise_type()` code reclassified the same PostgreSQL TEXT
+column as `SQL_WVARCHAR=-9` because 31 <= MaxVarcharSize=255.
+
+V3 keeps the ODBC long type stable for TEXT and unrecognized PostgreSQL types
+(including json/jsonb) when the Unicode driver uses `MaxLongVarcharSize=-4`
+and the respective `TextAsLongVarchar` or `UnknownsAsLongVarchar` setting is
+enabled. It also treats unconstrained `varchar` as a long type with dynamic
+length for this experimental configuration. The positive observed `ColumnSize`
+behavior of V2 remains intact.
+
+**Validation required on non-production SQL Server**: rerun the real
+`t_service_config_var` query with 8 columns, short TEXT values, small JSONB,
+100k TEXT, >1.5M XML, Unicode, NULL/empty, mixed lengths, and unconstrained
+VARCHAR. A previously loaded old DLL in a running SQL Server instance can
+continue to run despite replacing the on-disk driver; do not restart production
+SQL Server solely for this experiment without an approved change window.
