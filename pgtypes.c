@@ -397,7 +397,7 @@ MYLOG(DETAIL_LOG_LEVEL, "!!! adtsize_or_logngest=%d\n", adtsize_or_longestlen);
 	if (CC_is_in_unicode_driver(conn) &&
 	    maxsize == SQL_NO_TOTAL && p > 0)
 	{
-		MYLOG(0, "SQLSERVER_LOB_EXPERIMENT_V2: type=%d longest=%d\\n",
+		MYLOG(0, "SQLSERVER_LOB_EXPERIMENT_V2: type=%d longest=%d\n",
 		      type, p);
 		return p;
 	}
