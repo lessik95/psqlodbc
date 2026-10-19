@@ -348,6 +348,17 @@ getCharColumnSizeX(const ConnectionClass *conn, OID type, int atttypmod, int adt
 			break;
 
 		case PG_TYPE_VARCHAR:
+			/*
+			 * An unconstrained PostgreSQL varchar has no declared upper
+			 * bound. For the opted-in Unicode LOB experiment, advertise
+			 * it as a long column, like text, with stable metadata.
+			 */
+			if (atttypmod < 0 && CC_is_in_unicode_driver(conn) &&
+			    ci->drivers.max_longvarchar_size == SQL_NO_TOTAL)
+				maxsize = ci->drivers.max_longvarchar_size;
+			else
+				maxsize = ci->drivers.max_varchar_size;
+			break;
 		case PG_TYPE_BPCHAR:
 			maxsize = ci->drivers.max_varchar_size;
 			break;
@@ -731,6 +742,10 @@ pgtype_attr_to_concise_type(const ConnectionClass *conn, OID type, int atttypmod
 		case PG_TYPE_BPCHAR:
 			bFixed = TRUE;
 		case PG_TYPE_VARCHAR:
+			if (type == PG_TYPE_VARCHAR && atttypmod < 0 &&
+			    CC_is_in_unicode_driver(conn) &&
+			    ci->drivers.max_longvarchar_size == SQL_NO_TOTAL)
+				return ansi_to_wtype(conn, SQL_LONGVARCHAR);
 			if (getCharColumnSizeX(conn, type, atttypmod, adtsize_or_longestlen, handle_unknown_size_as) > ci->drivers.max_varchar_size)
 				bLongVarchar = TRUE;
 			else
