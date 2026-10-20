@@ -176,3 +176,34 @@ further without capturing the MSDASQL-side status or a tightly scoped
 reproduction. The next diagnostic may use a session-scoped SQL Server
 trace flag 7300 (if sysadmin privileges are available) and a boundary
 test of actual lengths just below/equal/above 8192.
+
+
+## V5 follow-up (2026-10-20)
+
+V4 boundary probes using a single TEXT value yielded:
+
+| Length in characters | Result |
+|---:|---|
+| 8191, 8192, 8193, 16384 | SQL Server 7341 |
+| 20000, 24576, 28672, 30720, 32000, 32767, 32768, 65536, 100000 | PASS |
+
+A **mixed two-row result set**, containing 31-character and 32768-character
+TEXT values in the same column, succeeded for both rows. SQL Server reported
+62 and 65536 bytes respectively. Therefore the long-value handling of the
+**entire result set** appears relevant, not merely each row's actual length.
+
+V5 is an experimental test: replace V4's 8192-character minimum returned
+`ColumnSize` with **32768 characters** for short opted-in TEXT, unconstrained
+VARCHAR, XML, JSON, and JSONB. Keep V3's stable ODBC long-type change,
+preserve `MaxLongVarcharSize=-4` opt-in and report actual longest length
+for results longer than the floor. New MyLog marker:
+`SQLSERVER_LOB_EXPERIMENT_V5: type=25 observed=31 reported=32768`.
+
+The size is a **reported metadata lower bound, not an actual
+value truncation limit**. It may incur a large memory/performance cost
+on wide/multicolumn queries and is not an established MSDASQL contract.
+Even though a mixed real result with 32768-char max length worked, there is
+no guarantee that *fabricating* a 32768-char maximum for standalone 31 chars
+will work. Test all 13 diagnostic SQL cases on the isolated second server,
+especially short TEXT/JSONB, unconstrained VARCHAR, actual DWH table and
+multi-row stress; do not deploy this experimental build in production.
