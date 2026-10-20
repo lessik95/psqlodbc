@@ -871,6 +871,29 @@ pgtype_attr_to_concise_type(const ConnectionClass *conn, OID type, int atttypmod
 				return SQL_LONGVARBINARY;
 
 			/*
+			 * SQL Server/MSDASQL Unicode LOB experiment, revision 6.
+			 * PostgreSQL json (OID 114) and jsonb (OID 3802) fall into
+			 * this default branch. Even on a Unicode connection the
+			 * pre-V6 code advertises SQL_LONGVARCHAR (-1) rather than
+			 * SQL_WLONGVARCHAR (-10), unlike the TEXT and XML branches.
+			 *
+			 * A short JSONB value fails with 7341 in V5 while short TEXT
+			 * and large JSONB pass. Test a stable Unicode LOB mapping
+			 * exclusively for these two PostgreSQL types and the existing
+			 * opt-in (Unicode, MaxLongVarcharSize=SQL_NO_TOTAL,
+			 * UnknownsAsLongVarchar enabled). Leave arbitrary unknown
+			 * PostgreSQL types and binary/large-object handling unchanged.
+			 */
+			if ((type == 114 /* PG json */ || type == 3802 /* PG jsonb */) &&
+			    CC_is_in_unicode_driver(conn) &&
+			    ci->drivers.max_longvarchar_size == SQL_NO_TOTAL &&
+			    ci->drivers.unknowns_as_longvarchar)
+			{
+				MYLOG(0, "SQLSERVER_LOB_EXPERIMENT_V6: json_oid=%d sql_type=SQL_WLONGVARCHAR\n", type);
+				return ansi_to_wtype(conn, SQL_LONGVARCHAR);
+			}
+
+			/*
 			 * Keep the long type stable for unknown PostgreSQL types
 			 * (notably json/jsonb), for the same MSDASQL prepare/execute
 			 * metadata consistency reason as PG_TYPE_TEXT above.
