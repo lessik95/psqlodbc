@@ -348,6 +348,17 @@ getCharColumnSizeX(const ConnectionClass *conn, OID type, int atttypmod, int adt
 			break;
 
 		case PG_TYPE_VARCHAR:
+			/*
+			 * An unconstrained PostgreSQL varchar has no declared upper
+			 * bound. For the opted-in Unicode LOB experiment, advertise
+			 * it as a long column, like text, with stable metadata.
+			 */
+			if (atttypmod < 0 && CC_is_in_unicode_driver(conn) &&
+			    ci->drivers.max_longvarchar_size == SQL_NO_TOTAL)
+				maxsize = ci->drivers.max_longvarchar_size;
+			else
+				maxsize = ci->drivers.max_varchar_size;
+			break;
 		case PG_TYPE_BPCHAR:
 			maxsize = ci->drivers.max_varchar_size;
 			break;
@@ -379,6 +390,41 @@ MYLOG(DETAIL_LOG_LEVEL, "!!! atttypmod  < 0 ?\n");
 
 MYLOG(DETAIL_LOG_LEVEL, "!!! adtsize_or_logngest=%d\n", adtsize_or_longestlen);
 	p = adtsize_or_longestlen; /* longest */
+#ifdef UNICODE_SUPPORT
+	/*
+	 * SQL Server/MSDASQL LOB metadata experiment, revision 5.
+	 *
+	 * The bridge sees an unspecified size during prepare and an observed
+	 * size during execution. If that observed size is small, MSDASQL can
+	 * change DBCOLUMNFLAGS_ISLONG even when the SQL_(W)LONGVARCHAR type
+	 * stays constant (SQL Server error 7356). V3 fixed the SQL type;
+	 * V5 tests an empirically verified column-wide LOB length floor.
+	 *
+	 * The V4 8192-character floor failed with 7341 for short values.
+	 * A 32768-character TEXT row succeeded together with a 31-character
+	 * row in one result (62 and 65536 UTF-16 bytes); a standalone
+	 * 20000-character TEXT row also succeeded. The new floor tests
+	 * MSDASQL's long-value conversion path, without changing row data.
+	 * This is still experimental: not a confirmed compatibility fix.
+	 * It is enabled only on opted-in Unicode SQL_NO_TOTAL DSNs.
+	 */
+	if (CC_is_in_unicode_driver(conn) &&
+	    maxsize == SQL_NO_TOTAL && p > 0)
+	{
+		int report_size = p;
+		if ((type == PG_TYPE_TEXT && ci->drivers.text_as_longvarchar) ||
+		    (type == PG_TYPE_VARCHAR && atttypmod < 0) ||
+		    type == PG_TYPE_XML || type == 114 /* json */ ||
+		    type == 3802 /* jsonb */)
+		{
+			if (report_size < 32768)
+				report_size = 32768;
+		}
+		MYLOG(0, "SQLSERVER_LOB_EXPERIMENT_V5: type=%d observed=%d reported=%d\n",
+		      type, p, report_size);
+		return report_size;
+	}
+#endif /* UNICODE_SUPPORT */
 	/*
 	 * Catalog Result Sets -- use assigned column width (i.e., from
 	 * set_tuplefield_string)
@@ -708,12 +754,28 @@ pgtype_attr_to_concise_type(const ConnectionClass *conn, OID type, int atttypmod
 		case PG_TYPE_BPCHAR:
 			bFixed = TRUE;
 		case PG_TYPE_VARCHAR:
+			if (type == PG_TYPE_VARCHAR && atttypmod < 0 &&
+			    CC_is_in_unicode_driver(conn) &&
+			    ci->drivers.max_longvarchar_size == SQL_NO_TOTAL)
+				return ansi_to_wtype(conn, SQL_LONGVARCHAR);
 			if (getCharColumnSizeX(conn, type, atttypmod, adtsize_or_longestlen, handle_unknown_size_as) > ci->drivers.max_varchar_size)
 				bLongVarchar = TRUE;
 			else
 				bLongVarchar = FALSE;
 			return ansi_to_wtype(conn, bLongVarchar ? SQL_LONGVARCHAR : (bFixed ? SQL_CHAR : SQL_VARCHAR));
 		case PG_TYPE_TEXT:
+			/*
+			 * SQL Server/MSDASQL LOB experiment, revision 3:
+			 * Compilation can observe an unknown length, while execution
+			 * observes a small positive longest value. Do not switch the
+			 * reported SQL type from SQL_WLONGVARCHAR to SQL_WVARCHAR
+			 * when MaxLongVarcharSize=SQL_NO_TOTAL opted into the test.
+			 * SQL Server rejects such a change as error 7356 (ISLONG).
+			 */
+			if (CC_is_in_unicode_driver(conn) &&
+			    ci->drivers.max_longvarchar_size == SQL_NO_TOTAL &&
+			    ci->drivers.text_as_longvarchar)
+				return ansi_to_wtype(conn, SQL_LONGVARCHAR);
 			bLongVarchar = ci->drivers.text_as_longvarchar;
 			if (bLongVarchar)
 			{
@@ -808,6 +870,38 @@ pgtype_attr_to_concise_type(const ConnectionClass *conn, OID type, int atttypmod
 			if (type == conn->lobj_type)
 				return SQL_LONGVARBINARY;
 
+			/*
+			 * SQL Server/MSDASQL Unicode LOB experiment, revision 6.
+			 * PostgreSQL json (OID 114) and jsonb (OID 3802) fall into
+			 * this default branch. Even on a Unicode connection the
+			 * pre-V6 code advertises SQL_LONGVARCHAR (-1) rather than
+			 * SQL_WLONGVARCHAR (-10), unlike the TEXT and XML branches.
+			 *
+			 * A short JSONB value fails with 7341 in V5 while short TEXT
+			 * and large JSONB pass. Test a stable Unicode LOB mapping
+			 * exclusively for these two PostgreSQL types and the existing
+			 * opt-in (Unicode, MaxLongVarcharSize=SQL_NO_TOTAL,
+			 * UnknownsAsLongVarchar enabled). Leave arbitrary unknown
+			 * PostgreSQL types and binary/large-object handling unchanged.
+			 */
+			if ((type == 114 /* PG json */ || type == 3802 /* PG jsonb */) &&
+			    CC_is_in_unicode_driver(conn) &&
+			    ci->drivers.max_longvarchar_size == SQL_NO_TOTAL &&
+			    ci->drivers.unknowns_as_longvarchar)
+			{
+				MYLOG(0, "SQLSERVER_LOB_EXPERIMENT_V6: json_oid=%d sql_type=SQL_WLONGVARCHAR\n", type);
+				return ansi_to_wtype(conn, SQL_LONGVARCHAR);
+			}
+
+			/*
+			 * Keep the long type stable for unknown PostgreSQL types
+			 * (notably json/jsonb), for the same MSDASQL prepare/execute
+			 * metadata consistency reason as PG_TYPE_TEXT above.
+			 */
+			if (CC_is_in_unicode_driver(conn) &&
+			    ci->drivers.max_longvarchar_size == SQL_NO_TOTAL &&
+			    ci->drivers.unknowns_as_longvarchar)
+				return SQL_LONGVARCHAR;
 			bLongVarchar = ci->drivers.unknowns_as_longvarchar;
 			if (bLongVarchar)
 			{
