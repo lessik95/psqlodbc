@@ -246,3 +246,36 @@ non-production SQL Server: original 13-test suite, especially short JSONB
 non-ASCII text, real `CFG.t_service_config_var` table, and short/long TEXT.
 This opt-in change can affect provider conversion and metadata buffers.
 Do not install in production without regression/performance testing.
+
+
+## V6 acceptance result (2026-10-20)
+
+The user ran the 13-case SQL Server linked-server diagnostic suite against
+psqlODBC experimental V6 (Unicode x64) and reported **13/13 PASS**.
+
+Covered cases:
+1. TEXT 100000 characters
+2. short TEXT 31 characters (earlier 7356/7341 regression)
+3. TEXT empty string and NULL
+4. mixed TEXT 31 / 100000 characters
+5. XML 1,589,499 characters
+6. short PostgreSQL JSONB (earlier 7341 regression)
+7. large JSONB
+8. actual `"CFG".t_service_config_var` `fc_description`
+9. actual four TEXT columns
+10. actual `SELECT * ... LIMIT 100`
+11. actual original `SELECT * FROM "CFG".t_service_config_var ORDER BY fk_id;`
+12. unconstrained VARCHAR 100000
+13. unconstrained VARCHAR 31
+
+This validates functionality in the tested environment, including the
+production-shaped query, but **does not establish production readiness**.
+
+Before production change approval: test diverse real-world JSON/JSONB including
+non-ASCII and escaping, large and narrow multi-column result sets, row counts
+and hashes against PostgreSQL, simultaneous query concurrency, memory/CPU
+behavior with the 32768-character metadata floor, and stability across
+restarts and deployment/rollback. Verify the intended DLL is loaded in the
+SQL Server host process. The on-disk driver version remains 18.00.0005
+across experiments. Avoid production restart except in an approved
+maintenance window. Disable ODBC MyLog and rotate any exposed DB password.
