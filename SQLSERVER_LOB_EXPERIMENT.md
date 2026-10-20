@@ -146,3 +146,33 @@ SQL Server 7347 (expected length mismatch), 7356 (other metadata
 flags), and 7341 (fetch truncation). If V4 fails, investigate MSDASQL
 OLE DB metadata rather than blindly increasing sizes. Do not deploy
 unvalidated code to production.
+
+
+## V4 validation result: failed short LOB values
+
+Windows standard x64 CI passed, but **real SQL Server/MSDASQL tests did not**:
+7/13 PASS. Tests 2 (short TEXT), 6 (short JSONB), 8–11 (real
+`CFG.t_service_config_var`) and 13 (short unconstrained VARCHAR) failed
+with SQL Server **7341**. Tests 1, 3–5, 7, and 12 passed.
+
+MyLog definitively shows the V4 implementation executing:
+
+```text
+SQLSERVER_LOB_EXPERIMENT_V4: type=25 observed=31 reported=8192
+SQLDescribeCol column_size=8192, SQL_WLONGVARCHAR=-10
+SQLGetData first request BufferLength=0 -> expected warning
+SQLGetData second request BufferLength=64 -> 62 UTF-16 bytes
+SQLSERVER_LOB_EXPERIMENT_V4: type=3802 observed=10 reported=8192
+SQLGetData second request BufferLength=11 -> 10 ANSI bytes
+```
+
+Thus, the string is read correctly by the ODBC driver on the second call,
+yet the SQL Server consumer rejects the row with 7341. This suggests a
+problem in the OLE DB bridge's handling of metadata/row access, **not a
+proven psqlODBC data truncation**.
+
+**Do not deploy V4 in production.** Do not increase fabricated sizes
+further without capturing the MSDASQL-side status or a tightly scoped
+reproduction. The next diagnostic may use a session-scoped SQL Server
+trace flag 7300 (if sysadmin privileges are available) and a boundary
+test of actual lengths just below/equal/above 8192.
