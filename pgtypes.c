@@ -392,20 +392,21 @@ MYLOG(DETAIL_LOG_LEVEL, "!!! adtsize_or_logngest=%d\n", adtsize_or_longestlen);
 	p = adtsize_or_longestlen; /* longest */
 #ifdef UNICODE_SUPPORT
 	/*
-	 * SQL Server/MSDASQL LOB metadata experiment, revision 4.
+	 * SQL Server/MSDASQL LOB metadata experiment, revision 5.
 	 *
 	 * The bridge sees an unspecified size during prepare and an observed
 	 * size during execution. If that observed size is small, MSDASQL can
 	 * change DBCOLUMNFLAGS_ISLONG even when the SQL_(W)LONGVARCHAR type
 	 * stays constant (SQL Server error 7356). V3 fixed the SQL type;
-	 * V4 additionally prevents a short result value from reducing the
-	 * reported maximum size beneath either OLE DB LONG threshold.
+	 * V5 tests an empirically verified column-wide LOB length floor.
 	 *
-	 * 8192 characters exceeds both 4000 for Unicode and 8000 for ANSI.
-	 * Actual data and SQLGetData streaming remain unchanged.
-	 * This is limited to opted-in Unicode DSNs with SQL_NO_TOTAL, and to
-	 * known long text/JSON/XML types. Values longer than 8192 retain their
-	 * observed lengths, as in V2/V3. All changes are experimental.
+	 * The V4 8192-character floor failed with 7341 for short values.
+	 * A 32768-character TEXT row succeeded together with a 31-character
+	 * row in one result (62 and 65536 UTF-16 bytes); a standalone
+	 * 20000-character TEXT row also succeeded. The new floor tests
+	 * MSDASQL's long-value conversion path, without changing row data.
+	 * This is still experimental: not a confirmed compatibility fix.
+	 * It is enabled only on opted-in Unicode SQL_NO_TOTAL DSNs.
 	 */
 	if (CC_is_in_unicode_driver(conn) &&
 	    maxsize == SQL_NO_TOTAL && p > 0)
@@ -416,10 +417,10 @@ MYLOG(DETAIL_LOG_LEVEL, "!!! adtsize_or_logngest=%d\n", adtsize_or_longestlen);
 		    type == PG_TYPE_XML || type == 114 /* json */ ||
 		    type == 3802 /* jsonb */)
 		{
-			if (report_size < 8192)
-				report_size = 8192;
+			if (report_size < 32768)
+				report_size = 32768;
 		}
-		MYLOG(0, "SQLSERVER_LOB_EXPERIMENT_V4: type=%d observed=%d reported=%d\n",
+		MYLOG(0, "SQLSERVER_LOB_EXPERIMENT_V5: type=%d observed=%d reported=%d\n",
 		      type, p, report_size);
 		return report_size;
 	}
