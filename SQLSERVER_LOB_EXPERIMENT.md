@@ -279,3 +279,44 @@ restarts and deployment/rollback. Verify the intended DLL is loaded in the
 SQL Server host process. The on-disk driver version remains 18.00.0005
 across experiments. Avoid production restart except in an approved
 maintenance window. Disable ODBC MyLog and rotate any exposed DB password.
+
+
+
+## Final V6 acceptance and deployment status (2026-10-20)
+
+V6 was validated on an isolated SQL Server 2025 test host with the target
+MSDASQL -> psqlODBC Unicode x64 -> PostgreSQL 16.2 linked-server path:
+
+| Acceptance test | Result |
+|---|---|
+| Functional regression suite | 13/13 PASS |
+| Read-only extended SQL and Unicode / MD5 integrity suite | 23/23 PASS |
+| Parallel 101-row baseline queries (1/4/8 workers) | 260/260 PASS |
+| Parallel 1,000-row baseline queries (1/4/8 workers) | 2,600/2,600 PASS |
+| Parallel four-LOB-column queries (4/8 workers) | 36/36 PASS |
+
+The 2,600-query test processed 2.6 million rows; all tested checks succeeded.
+The four-LOB-column test validated four simultaneous LOB fields across 4 and
+8 concurrent connections. In observed runs there were no SQL Server 7341,
+7347, or 7356 errors, no checksum mismatches, and no recorded memory-pressure
+flags. This is an environment-specific acceptance result rather than an
+upstream/general psqlODBC compatibility guarantee.
+
+The operator subsequently confirmed completion of the production maintenance
+activity. No separate, independently captured production smoke-test output is
+included here. Do not infer ongoing production telemetry from this statement.
+
+### Security and operations
+
+This repository documentation intentionally contains **no database passwords,
+secret values, or connection strings with credentials**. Keep full ODBC MyLog
+output, passwords, credentials, and system-specific secrets out of Git history,
+pull request conversations, issue comments, and build artifacts. Disable MyLog
+after testing and rotate any credentials exposed by earlier logs.
+
+The patch is limited to the existing Unicode + SQL_NO_TOTAL opt-in path.
+The 32768-character reported metadata floor can have memory/performance
+implications in workloads not covered here. Production deployment requires
+an approved maintenance window, verification that the new DLL is loaded, and
+a tested rollback plan. Do not mistake the driver version string 18.00.0005
+for a unique binary/build identifier; use the artifact checksum.
