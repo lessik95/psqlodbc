@@ -112,3 +112,37 @@ behavior of V2 remains intact.
 VARCHAR. A previously loaded old DLL in a running SQL Server instance can
 continue to run despite replacing the on-disk driver; do not restart production
 SQL Server solely for this experiment without an approved change window.
+
+
+## Revision 4 (persistent 7356 under V3)
+
+V3 MyLog definitively shows the V3 driver is loaded (source line 1128 for
+`pgtype_attr_column_size`). Both prepare and execute report
+`SQL_WLONGVARCHAR=-10` for short TEXT, but prepare reports
+`ColumnSize=-4` / `ColDef=0`, whereas execution reports `31` /
+`ColDef=31`. Short JSONB similarly retains `SQL_LONGVARCHAR=-1` yet
+changes length from unknown to `10`. This appears consistent with
+MSDASQL changing its OLE DB `DBCOLUMNFLAGS_ISLONG` classification
+based on size even though the ODBC SQL type is stable.
+
+V4 is a separate metadata-only hypothesis: with Unicode driver,
+`MaxLongVarcharSize=-4`, and a known positive observed length, the
+driver reports at least **8192 characters** for PostgreSQL TEXT,
+unconstrained VARCHAR, XML, JSON (OID 114), and JSONB (OID 3802). The
+8192 minimum is chosen to exceed both OLE DB character LOB thresholds
+(4000 wide / 8000 narrow). Longer values retain their observed lengths.
+It does not change field content, streaming, or error handling.
+
+Diagnostic MyLog marker:
+
+```
+SQLSERVER_LOB_EXPERIMENT_V4: type=25 observed=31 reported=8192
+```
+
+**Important**: This is an experimental workaround, not a confirmed fix.
+Retest all 13 original cases, especially short TEXT, JSONB, real 8-column
+table, and unconstrained VARCHAR. In addition, observe potential
+SQL Server 7347 (expected length mismatch), 7356 (other metadata
+flags), and 7341 (fetch truncation). If V4 fails, investigate MSDASQL
+OLE DB metadata rather than blindly increasing sizes. Do not deploy
+unvalidated code to production.
