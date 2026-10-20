@@ -207,3 +207,42 @@ no guarantee that *fabricating* a 32768-char maximum for standalone 31 chars
 will work. Test all 13 diagnostic SQL cases on the isolated second server,
 especially short TEXT/JSONB, unconstrained VARCHAR, actual DWH table and
 multi-row stress; do not deploy this experimental build in production.
+
+
+## V5: 12/13 SQL Server diagnostic tests passed
+
+V5 was tested against SQL Server 2025 Enterprise -> MSDASQL ->
+psqlODBC Unicode x64 -> PostgreSQL 16.2. Results:
+
+- PASS: 100k TEXT, short TEXT (31 chars), empty/NULL TEXT,
+  mixed short/long TEXT, 1,589,499-char XML, large JSONB,
+  actual `CFG.t_service_config_var` columns, entire real table,
+  short and long unconstrained VARCHAR.
+- FAIL: **small JSONB** (`jsonb_build_object('a', 'X')`),
+  SQL Server error 7341.
+
+In `pgtype_attr_to_concise_type`, TEXT and XML use
+`ansi_to_wtype(conn, SQL_LONGVARCHAR)` and become
+`SQL_WLONGVARCHAR=-10` on a Unicode connection. However, JSON and JSONB
+(OIDs 114 and 3802) take the default unknown-type branch, which returns
+`SQL_LONGVARCHAR=-1` even on a Unicode connection. This difference is
+supported by earlier MyLog (JSONB SQLGetData with SQL_C_CHAR).
+
+## V6: targeted JSON/JSONB Unicode long mapping hypothesis
+
+For these exact PostgreSQL OIDs, under the existing opt-in
+`CC_is_in_unicode_driver(conn)`, `MaxLongVarcharSize=-4`, and
+`UnknownsAsLongVarchar=1`, use
+`ansi_to_wtype(conn, SQL_LONGVARCHAR)` to return `SQL_WLONGVARCHAR=-10`.
+All other unknown PostgreSQL OIDs retain their V5 behavior.
+
+V5's empirical 32768-character metadata floor is unchanged.
+MyLog marker:
+`SQLSERVER_LOB_EXPERIMENT_V6: json_oid=3802 sql_type=SQL_WLONGVARCHAR`
+
+**Not validated in SQL Server yet.** Important checks after installing on the
+non-production SQL Server: original 13-test suite, especially short JSONB
+(test 6), small PostgreSQL JSON (OID 114), large JSONB, JSON containing
+non-ASCII text, real `CFG.t_service_config_var` table, and short/long TEXT.
+This opt-in change can affect provider conversion and metadata buffers.
+Do not install in production without regression/performance testing.
