@@ -392,25 +392,36 @@ MYLOG(DETAIL_LOG_LEVEL, "!!! adtsize_or_logngest=%d\n", adtsize_or_longestlen);
 	p = adtsize_or_longestlen; /* longest */
 #ifdef UNICODE_SUPPORT
 	/*
-	 * SQL Server/MSDASQL long Unicode experiment, revision 2.
+	 * SQL Server/MSDASQL LOB metadata experiment, revision 4.
 	 *
-	 * The SQL Server Linked Server provider can load the driver from an
-	 * out-of-process host instead of sqlservr.exe. isSqlServr() is therefore
-	 * not a reliable guard. The configured MaxLongVarcharSize=SQL_NO_TOTAL
-	 * (-4) serves as the explicit opt-in for this experimental behavior.
+	 * The bridge sees an unspecified size during prepare and an observed
+	 * size during execution. If that observed size is small, MSDASQL can
+	 * change DBCOLUMNFLAGS_ISLONG even when the SQL_(W)LONGVARCHAR type
+	 * stays constant (SQL Server error 7356). V3 fixed the SQL type;
+	 * V4 additionally prevents a short result value from reducing the
+	 * reported maximum size beneath either OLE DB LONG threshold.
 	 *
-	 * When the complete result is already available and its largest field
-	 * is known, report that positive size instead of a zero ColumnSize.
-	 * Keep the SQL_WLONGVARCHAR type and data-copy semantics unchanged.
-	 * This is only a metadata experiment: not a fix for unknown-size
-	 * results or a substitute for correct streaming/SQLGetData.
+	 * 8192 characters exceeds both 4000 for Unicode and 8000 for ANSI.
+	 * Actual data and SQLGetData streaming remain unchanged.
+	 * This is limited to opted-in Unicode DSNs with SQL_NO_TOTAL, and to
+	 * known long text/JSON/XML types. Values longer than 8192 retain their
+	 * observed lengths, as in V2/V3. All changes are experimental.
 	 */
 	if (CC_is_in_unicode_driver(conn) &&
 	    maxsize == SQL_NO_TOTAL && p > 0)
 	{
-		MYLOG(0, "SQLSERVER_LOB_EXPERIMENT_V2: type=%d longest=%d\n",
-		      type, p);
-		return p;
+		int report_size = p;
+		if ((type == PG_TYPE_TEXT && ci->drivers.text_as_longvarchar) ||
+		    (type == PG_TYPE_VARCHAR && atttypmod < 0) ||
+		    type == PG_TYPE_XML || type == 114 /* json */ ||
+		    type == 3802 /* jsonb */)
+		{
+			if (report_size < 8192)
+				report_size = 8192;
+		}
+		MYLOG(0, "SQLSERVER_LOB_EXPERIMENT_V4: type=%d observed=%d reported=%d\n",
+		      type, p, report_size);
+		return report_size;
 	}
 #endif /* UNICODE_SUPPORT */
 	/*
